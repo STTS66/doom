@@ -9,7 +9,7 @@ app.use(express.json());
 app.use(cors());
 app.use(express.static(__dirname));
 
-const connectionString = 'postgresql://neondb_owner:npg_dvcfk8pWS3Fs@ep-late-term-aiilpapy-pooler.c-4.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require';
+const connectionString = process.env.DATABASE_URL;
 const pool = new Pool({ connectionString });
 
 pool.query(`
