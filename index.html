@@ -92,7 +92,7 @@
             </div>
             
             <div id="inviteBox" style="display: none;">
-                <p style="color: #aaa; font-size: 14px; margin-bottom: 10px;" id="inviteTextDesc">Пригласи друга:</p>
+                <p style="color: #aaa; font-size: 14px; margin-bottom: 10px;" id="inviteTextDesc">Пригласите друга по этой ссылке:</p>
                 <div style="background: #000; padding: 12px; border: 1px dashed #f90; border-radius: 5px; color: #f90; margin-bottom: 20px; font-size: 13px; word-break: break-all;" id="inviteLink"></div>
                 <button class="authBtn" id="copyLinkBtn">📄 СКОПИРОВАТЬ ССЫЛКУ</button>
             </div>
@@ -128,12 +128,13 @@
     let myUsername = '', targetRoomID = '', gameStarted = false, photon = null;
     let isGuest = false;
 
+    // Генерируем URL грамотно
     const urlParams = new URLSearchParams(window.location.search);
     if(urlParams.get('room')) {
         targetRoomID = urlParams.get('room');
         isGuest = true;
     } else {
-        targetRoomID = 'ARENA_' + Math.random().toString(36).substring(2, 7).toUpperCase();
+        targetRoomID = 'ROOM_' + Math.random().toString(36).substring(2, 7).toUpperCase();
         isGuest = false;
     }
 
@@ -154,6 +155,7 @@
         const authError = document.getElementById('authError');
         if(!uInput.value || !pInput.value) { authError.innerText = 'Заполните поля'; return; }
         
+        authError.style.color = '#fff'; authError.innerText = 'Подключение...';
         try {
             const res = await fetch(API_URL + endpoint, {
                 method: 'POST',
@@ -162,12 +164,14 @@
             });
             const data = await res.json();
             if(!res.ok) { 
-                authError.innerText = data.error || 'Ошибка';
+                authError.innerText = data.error || 'Ошибка сервера';
+                authError.style.color = '#ff4d4d';
             } else { 
                 myUsername = data.username || uInput.value;
                 showLobby();
             }
         } catch(e) {
+            authError.style.color = '#ff4d4d';
             authError.innerText = 'Сервер недоступен!';
         }
     }
@@ -182,14 +186,16 @@
         document.getElementById('authPanel').style.display = 'none';
         document.getElementById('lobbyPanel').style.display = 'block';
         
+        // ПОКАЗЫВАТЬ ссылку ТОЛЬКО тому, кто ее создал
         if (!isGuest) {
             document.getElementById('inviteBox').style.display = 'block';
-            document.getElementById('inviteLink').innerText = window.location.origin + window.location.pathname + "?room=" + targetRoomID;
+            let pureURL = window.location.origin + window.location.pathname;
+            document.getElementById('inviteLink').innerText = pureURL + "?room=" + targetRoomID;
         } else {
             document.getElementById('inviteBox').style.display = 'none';
         }
 
-        initMultiplayer(); // Подключаемся к Photon СРАЗУ в лобби
+        initMultiplayer(); // Подключаемся к комнате Photon
     }
 
     document.getElementById('copyLinkBtn').addEventListener('click', () => {
@@ -203,39 +209,41 @@
         if(photon && photon.myRoom()) {
             startGame();
         } else {
-            alert('Сначала дождитесь подключения к серверу!');
+            alert('Сначала дождитесь успешного подключения к серверу лобби!');
         }
     });
 
+    // === ПРАВИЛЬНЫЙ КОД PHOTON SDK v4.1 ===
     function initMultiplayer() {
         photon = new Photon.LoadBalancing.LoadBalancingClient(Photon.ConnectionProtocol.Wss, APP_ID, '1.0');
-        
-        // Правильное переопределение методов Photon JS SDK
-        photon.onStateChange = function(state) {
-            if (state === Photon.LoadBalancing.LoadBalancingClient.State.ConnectedToMaster) {
-                photon.myActor().setName(myUsername);
-                photon.opJoinOrCreateRoom(targetRoomID);
-            }
-        };
+        photon.connectToRegion('eu');
 
-        photon.onJoinRoom = function() {
+        photon.addEventListener(Photon.LoadBalancing.EventName.CONNECTED_TO_MASTER, () => {
+            photon.myActor().setName(myUsername);
+            console.log("Connected to Master, joining room: " + targetRoomID);
+            photon.opJoinOrCreateRoom(targetRoomID);
+        });
+
+        photon.addEventListener(Photon.LoadBalancing.EventName.JOINED_ROOM, () => {
+            console.log("Joined Room", targetRoomID);
             myId = photon.myActor().actorNr;
             updatePlayerListUI();
-        };
+        });
 
-        photon.onActorJoin = function(actor) {
+        photon.addEventListener(Photon.LoadBalancing.EventName.ACTOR_JOINED, (actor) => {
+            console.log("Actor joined: ", actor.name);
             updatePlayerListUI();
-        };
+        });
 
-        photon.onActorLeave = function(actor) {
+        photon.addEventListener(Photon.LoadBalancing.EventName.ACTOR_LEFT, (actor) => {
             if(otherPlayers.has(actor.actorNr)) { 
                 scene.remove(otherPlayers.get(actor.actorNr)); 
                 otherPlayers.delete(actor.actorNr); 
             }
             updatePlayerListUI();
-        };
+        });
 
-        photon.onEvent = function(code, content, actorNr) {
+        photon.addEventListener(Photon.LoadBalancing.EventName.RAISE_EVENT, (code, content, actorNr) => {
             if(code === 1 && gameStarted) {
                 if(!otherPlayers.has(actorNr)) {
                     const op = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.4, 1.2), new THREE.MeshStandardMaterial({ color: 0x00aaff }));
@@ -244,9 +252,7 @@
                 const p = otherPlayers.get(actorNr);
                 p.position.set(content.x, content.y, content.z); p.rotation.y = content.ry;
             }
-        };
-
-        photon.connectToRegionMaster('eu');
+        });
     }
 
     function updatePlayerListUI() {
@@ -292,7 +298,7 @@
         renderer.setSize(window.innerWidth, window.innerHeight);
         document.body.appendChild(renderer.domElement);
 
-        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+        scene.add(new THREE.AmbientLight(0xffffff, 0.8)); // Освещение
         const dl = new THREE.DirectionalLight(0xff0000, 0.5); dl.position.set(5, 10, 5); scene.add(dl);
 
         const floor = new THREE.Mesh(new THREE.PlaneGeometry(100, 100), new THREE.MeshStandardMaterial({ color: 0x111111 }));
@@ -331,7 +337,8 @@
             if(keys['KeyW']) move.z -= 1; if(keys['KeyS']) move.z += 1;
             if(keys['KeyA']) move.x -= 1; if(keys['KeyD']) move.x += 1;
             move.applyQuaternion(camera.quaternion); move.y = 0;
-            camera.position.add(move.normalize().multiplyScalar(0.15));
+            if (move.length() > 0) camera.position.add(move.normalize().multiplyScalar(0.20)); // Чуть быстрее ход
+            
             if(photon && photon.myRoom()) {
                 photon.raiseEvent(1, { x: camera.position.x, y: camera.position.y, z: camera.position.z, ry: camera.rotation.y });
             }
