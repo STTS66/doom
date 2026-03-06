@@ -174,7 +174,8 @@ html_content = r"""<!DOCTYPE html>
 
     // Генерируем ID комнаты если нет в URL
     const urlParams = new URLSearchParams(window.location.search);
-    targetRoomID = urlParams.get('room') || 'ARENA_' + Math.random().toString(36).substring(2, 7).toUpperCase();
+    const roomFromUrl = urlParams.get('room');
+    targetRoomID = roomFromUrl || 'ARENA_' + Math.random().toString(36).substring(2, 7).toUpperCase();
 
     const authError = document.getElementById('authError');
     const uInput = document.getElementById('usernameInput');
@@ -206,7 +207,12 @@ html_content = r"""<!DOCTYPE html>
                 authError.style.color = '#ff4d4d';
             } else { 
                 myUsername = data.username || uInput.value;
-                showLobby();
+                if (roomFromUrl) {
+                    // Если зашли по ссылке, сразу входим
+                    startGame();
+                } else {
+                    showLobby();
+                }
             }
         } catch(e) {
             authError.style.color = '#ff4d4d';
@@ -320,7 +326,13 @@ html_content = r"""<!DOCTYPE html>
             document.getElementById('status').innerText = '🎮 ГУМАНОИД - ' + myUsername;
             updatePlayersCount();
         });
-        photon.addEventListener(Photon.LoadBalancing.EventName.ACTOR_JOINED, updatePlayersCount);
+        photon.addEventListener(Photon.LoadBalancing.EventName.ACTOR_JOINED, (act) => {
+            updatePlayersCount();
+            if(gameStarted) {
+                // Синхронизируем положение при входе нового игрока
+                photon.raiseEvent(1, { x: camera.position.x, y: camera.position.y, z: camera.position.z, ry: camera.rotation.y });
+            }
+        });
         photon.addEventListener(Photon.LoadBalancing.EventName.ACTOR_LEFT, (act) => {
             if(otherPlayers.has(act.actorNr)) { scene.remove(otherPlayers.get(act.actorNr)); otherPlayers.delete(act.actorNr); }
             updatePlayersCount();
@@ -350,7 +362,7 @@ html_content = r"""<!DOCTYPE html>
         if(document.pointerLockElement) {
             yaw -= e.movementX * 0.002 * settings.mouseSens;
             pitch -= e.movementY * 0.002 * settings.mouseSens;
-            pitch = Math.max(-Math.PI/2, Math.min(Math.PI/2, pitch));
+            pitch = Math.max(-1.4, Math.min(1.4, pitch));
             camera.rotation.set(pitch, yaw, 0, 'YXZ');
         }
     });
@@ -371,7 +383,7 @@ html_content = r"""<!DOCTYPE html>
             if(keys['KeyA']) dir.x -= 1; if(keys['KeyD']) dir.x += 1;
             dir.applyQuaternion(camera.quaternion); dir.y = 0;
             camera.position.add(dir.normalize().multiplyScalar(speed));
-            if(photon && photon.myRoom()) {
+            if(photon && photon.myRoom() && frames % 2 === 0) { // Оптимизация частоты отправки
                 photon.raiseEvent(1, { x: camera.position.x, y: camera.position.y, z: camera.position.z, ry: camera.rotation.y });
             }
         }
@@ -384,9 +396,18 @@ html_content = r"""<!DOCTYPE html>
                 }
             });
         });
+
+        frames++;
+        if(frames % 60 === 0) {
+            document.getElementById('fpsValue').innerText = '60'; // Заглушка FPS
+        }
+
         renderer.render(scene, camera);
+        updateUI();
     }
     
+    let frames = 0;
+
     // Tabs
     document.querySelectorAll('.menu-tab').forEach(t => {
         t.addEventListener('click', () => {
