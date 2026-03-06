@@ -10,6 +10,11 @@ app.use(cors());
 app.use(express.static(__dirname));
 
 const connectionString = process.env.DATABASE_URL;
+
+if (!connectionString) {
+    console.error('CRITICAL ERROR: DATABASE_URL is not set! Please add it to Environment Variables on Render.');
+}
+
 const pool = new Pool({ connectionString });
 
 pool.query(`
@@ -18,8 +23,11 @@ pool.query(`
         username VARCHAR(50) UNIQUE NOT NULL,
         password_hash VARCHAR(255) NOT NULL
     )
-`).then(() => console.log('DB Users table ready'))
-    .catch(e => console.error('DB Error:', e));
+`).then(() => console.log('DB Connection Successful: Users table ready'))
+    .catch(e => {
+        console.error('DATABASE CONNECTION ERROR:', e.message);
+        console.error('Make sure DATABASE_URL is correct and includes sslmode=require');
+    });
 
 app.post('/register', async (req, res) => {
     try {
