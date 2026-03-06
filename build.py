@@ -208,7 +208,6 @@ html_content = r"""<!DOCTYPE html>
             } else { 
                 myUsername = data.username || uInput.value;
                 if (roomFromUrl) {
-                    // Если зашли по ссылке, сразу входим
                     startGame();
                 } else {
                     showLobby();
@@ -249,7 +248,8 @@ html_content = r"""<!DOCTYPE html>
         document.getElementById('gameUI').style.display = 'block';
         if(!gameStarted) {
             gameStarted = true;
-            initMultiplayer();
+            initScene(); // Сначала создаем сцену
+            initMultiplayer(); // Потом коннект
             animate();
             renderer.domElement.requestPointerLock();
         }
@@ -258,61 +258,82 @@ html_content = r"""<!DOCTYPE html>
     const APP_ID = 'e8e01bce-e246-44a2-ab26-9f09c5704b7d';
     let settings = { mouseSens: 2.0, moveSpeed: 0.15, jumpPower: 0.2, crosshairStyle: 'plus', crosshairColor: '#ff0000', crosshairSize: 48, crosshairOpacity: 1 };
     
-    // Scene Setup
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x050505);
-    scene.fog = new THREE.Fog(0x050505, 10, 80);
-    const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.toneMapping = THREE.ReinhardToneMapping;
-    document.body.appendChild(renderer.domElement);
+    let scene, camera, renderer, weaponGroup;
+    let bullets = [];
+    let enemies = [];
+    let keys = {}, yaw = 0, pitch = 0, health = 150, ammo = 30;
 
-    // World
-    scene.add(new THREE.AmbientLight(0x404040, 1));
-    const dLight = new THREE.DirectionalLight(0xff0000, 0.5); dLight.position.set(5, 10, 7); scene.add(dLight);
-    
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(100, 100), new THREE.MeshStandardMaterial({ color: 0x111111 }));
-    floor.rotation.x = -Math.PI/2; scene.add(floor);
-    scene.add(new THREE.GridHelper(100, 50, 0x330000, 0x111111));
+    function initScene() {
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0a0a0a); // Убедимся, что фон не просто черный
+        scene.fog = new THREE.Fog(0x0a0a0a, 10, 80);
+        
+        camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 2, 5); // Поднимем выше пола
+        
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.body.appendChild(renderer.domElement);
 
-    // Simple Map Geometry
-    const boxGeo = new THREE.BoxGeometry(4, 8, 4);
-    const boxMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
-    for(let i=0; i<20; i++) {
-        const pillar = new THREE.Mesh(boxGeo, boxMat);
-        pillar.position.set((Math.random()-0.5)*80, 4, (Math.random()-0.5)*80);
-        scene.add(pillar);
+        // Свет
+        scene.add(new THREE.AmbientLight(0xffffff, 0.5)); // Больше света
+        const dLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dLight.position.set(10, 20, 10);
+        scene.add(dLight);
+        
+        // Пол
+        const floor = new THREE.Mesh(
+            new THREE.PlaneGeometry(100, 100), 
+            new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 })
+        );
+        floor.rotation.x = -Math.PI/2;
+        scene.add(floor);
+        
+        const grid = new THREE.GridHelper(100, 50, 0xff0000, 0x333333);
+        scene.add(grid);
+
+        // Столбы
+        const boxGeo = new THREE.BoxGeometry(4, 8, 4);
+        const boxMat = new THREE.MeshStandardMaterial({ color: 0x444444 });
+        for(let i=0; i<20; i++) {
+            const pillar = new THREE.Mesh(boxGeo, boxMat);
+            pillar.position.set((Math.random()-0.5)*80, 4, (Math.random()-0.5)*80);
+            scene.add(pillar);
+        }
+
+        // Оружие
+        weaponGroup = new THREE.Group();
+        const pistolBody = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.4, 1), new THREE.MeshStandardMaterial({ color: 0x111 }));
+        pistolBody.position.set(0.6, -0.4, -0.8);
+        weaponGroup.add(pistolBody);
+        camera.add(weaponGroup);
+        scene.add(camera);
+
+        // Враги
+        for(let i=0; i<12; i++) spawnEnemy();
     }
 
-    // Weapons
-    const weaponGroup = new THREE.Group(); camera.add(weaponGroup); scene.add(camera);
-    const pistolBody = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.4, 1), new THREE.MeshStandardMaterial({ color: 0x222 }));
-    pistolBody.position.set(0.6, -0.4, -0.8); weaponGroup.add(pistolBody);
-
-    // Bullets & Enemies (Ported from prev version)
-    const bullets = [];
-    function createBullet() {
-        if(ammo <= 0) return;
-        ammo--; updateUI();
-        const b = new THREE.Mesh(new THREE.SphereGeometry(0.1), new THREE.MeshBasicMaterial({ color: 0xfff000 }));
-        b.position.copy(camera.position);
-        const dir = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
-        bullets.push({ mesh: b, vel: dir.multiplyScalar(0.8), life: 100 });
-        scene.add(b);
-    }
-
-    const enemies = [];
     function spawnEnemy() {
         const e = new THREE.Group();
-        const body = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), new THREE.MeshStandardMaterial({ color: 0xaa0000 }));
-        e.add(body); e.position.set((Math.random()-0.5)*60, 1, (Math.random()-0.5)*60);
+        const body = new THREE.Mesh(new THREE.BoxGeometry(1.5, 2.5, 1.5), new THREE.MeshStandardMaterial({ color: 0xaa0000 }));
+        e.add(body);
+        e.position.set((Math.random()-0.5)*80, 1.25, (Math.random()-0.5)*80);
         enemies.push({ mesh: e, health: 100, alive: true });
         scene.add(e);
     }
-    for(let i=0; i<12; i++) spawnEnemy();
 
-    // Multiplayer
+    function createBullet() {
+        if(ammo <= 0) return;
+        ammo--;
+        const b = new THREE.Mesh(new THREE.SphereGeometry(0.15), new THREE.MeshBasicMaterial({ color: 0xffff00 }));
+        b.position.copy(camera.position);
+        const dir = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
+        bullets.push({ mesh: b, vel: dir.multiplyScalar(1.2), life: 60 });
+        scene.add(b);
+    }
+
+    // Мультиплеер
     let photon = null, myId = null, otherPlayers = new Map();
     function initMultiplayer() {
         photon = new Photon.LoadBalancing.LoadBalancingClient(Photon.ConnectionProtocol.Wss, APP_ID, '1.0');
@@ -323,16 +344,10 @@ html_content = r"""<!DOCTYPE html>
         });
         photon.addEventListener(Photon.LoadBalancing.EventName.JOINED_ROOM, () => {
             myId = photon.myActor().actorNr;
-            document.getElementById('status').innerText = '🎮 ГУМАНОИД - ' + myUsername;
+            document.getElementById('status').innerText = '🎮 ' + myUsername;
             updatePlayersCount();
         });
-        photon.addEventListener(Photon.LoadBalancing.EventName.ACTOR_JOINED, (act) => {
-            updatePlayersCount();
-            if(gameStarted) {
-                // Синхронизируем положение при входе нового игрока
-                photon.raiseEvent(1, { x: camera.position.x, y: camera.position.y, z: camera.position.z, ry: camera.rotation.y });
-            }
-        });
+        photon.addEventListener(Photon.LoadBalancing.EventName.ACTOR_JOINED, updatePlayersCount);
         photon.addEventListener(Photon.LoadBalancing.EventName.ACTOR_LEFT, (act) => {
             if(otherPlayers.has(act.actorNr)) { scene.remove(otherPlayers.get(act.actorNr)); otherPlayers.delete(act.actorNr); }
             updatePlayersCount();
@@ -340,7 +355,7 @@ html_content = r"""<!DOCTYPE html>
         photon.addEventListener(Photon.LoadBalancing.EventName.RAISE_EVENT, (code, data, actorNr) => {
             if(code === 1) {
                 if(!otherPlayers.has(actorNr)) {
-                    const op = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), new THREE.MeshStandardMaterial({ color: 0x00aaff }));
+                    const op = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.4, 1.2), new THREE.MeshStandardMaterial({ color: 0x00aaff }));
                     scene.add(op); otherPlayers.set(actorNr, op);
                 }
                 const p = otherPlayers.get(actorNr);
@@ -348,14 +363,13 @@ html_content = r"""<!DOCTYPE html>
             }
         });
     }
+
     function updatePlayersCount() {
         const c = photon && photon.myRoom() ? photon.actors.count : 1;
         document.getElementById('playersOnline').innerText = c;
         document.getElementById('onlineCount').innerText = c;
     }
 
-    // Input & Game Loop
-    let keys = {}, yaw = 0, pitch = 0, health = 150, ammo = 30;
     window.addEventListener('keydown', e => { keys[e.code] = true; if(e.code === 'KeyR') ammo = 30; });
     window.addEventListener('keyup', e => keys[e.code] = false);
     window.addEventListener('mousemove', e => {
@@ -368,45 +382,42 @@ html_content = r"""<!DOCTYPE html>
     });
     window.addEventListener('mousedown', e => { if(document.pointerLockElement) createBullet(); });
 
-    function updateUI() {
+    function animate() {
+        if(!gameStarted) return;
+        requestAnimationFrame(animate);
+        
+        if(document.pointerLockElement) {
+            const speed = settings.moveSpeed;
+            const moveDir = new THREE.Vector3();
+            if(keys['KeyW']) moveDir.z -= 1; if(keys['KeyS']) moveDir.z += 1;
+            if(keys['KeyA']) moveDir.x -= 1; if(keys['KeyD']) moveDir.x += 1;
+            moveDir.applyQuaternion(camera.quaternion);
+            moveDir.y = 0;
+            if(moveDir.length() > 0) camera.position.add(moveDir.normalize().multiplyScalar(speed));
+            
+            if(photon && photon.myRoom()) {
+                photon.raiseEvent(1, { x: camera.position.x, y: camera.position.y, z: camera.position.z, ry: camera.rotation.y });
+            }
+        }
+        
+        bullets.forEach((b, i) => {
+            b.mesh.position.add(b.vel); b.life--;
+            if(b.life <= 0) { scene.remove(b.mesh); bullets.splice(i, 1); }
+            else {
+                enemies.forEach(e => {
+                    if(e.alive && e.mesh.position.distanceTo(b.mesh.position) < 2) {
+                        e.alive = false; scene.remove(e.mesh);
+                    }
+                });
+            }
+        });
+
+        renderer.render(scene, camera);
+        
         document.getElementById('health').innerText = health;
         document.getElementById('ammo').innerText = ammo + '/30';
         document.getElementById('enemyCount').innerText = enemies.filter(e => e.alive).length;
     }
-
-    function animate() {
-        requestAnimationFrame(animate);
-        if(document.pointerLockElement) {
-            const speed = settings.moveSpeed;
-            const dir = new THREE.Vector3();
-            if(keys['KeyW']) dir.z -= 1; if(keys['KeyS']) dir.z += 1;
-            if(keys['KeyA']) dir.x -= 1; if(keys['KeyD']) dir.x += 1;
-            dir.applyQuaternion(camera.quaternion); dir.y = 0;
-            camera.position.add(dir.normalize().multiplyScalar(speed));
-            if(photon && photon.myRoom() && frames % 2 === 0) { // Оптимизация частоты отправки
-                photon.raiseEvent(1, { x: camera.position.x, y: camera.position.y, z: camera.position.z, ry: camera.rotation.y });
-            }
-        }
-        bullets.forEach((b, i) => {
-            b.mesh.position.add(b.vel); b.life--;
-            if(b.life <= 0) { scene.remove(b.mesh); bullets.splice(i, 1); }
-            enemies.forEach(e => {
-                if(e.mesh.position.distanceTo(b.mesh.position) < 1.5 && e.alive) {
-                    e.alive = false; scene.remove(e.mesh);
-                }
-            });
-        });
-
-        frames++;
-        if(frames % 60 === 0) {
-            document.getElementById('fpsValue').innerText = '60'; // Заглушка FPS
-        }
-
-        renderer.render(scene, camera);
-        updateUI();
-    }
-    
-    let frames = 0;
 
     // Tabs
     document.querySelectorAll('.menu-tab').forEach(t => {
@@ -418,6 +429,7 @@ html_content = r"""<!DOCTYPE html>
     });
 
     window.addEventListener('resize', () => {
+        if(!camera) return;
         camera.aspect = window.innerWidth/window.innerHeight; camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
     });
