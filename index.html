@@ -87,13 +87,17 @@
         <div id="lobbyPanel">
             <h2>ЛОББИ КОМНАТЫ</h2>
             <div id="playerListBox">
-                <div style="color: #666; font-size: 12px; margin-bottom: 8px;">КТО В ЛОББИ:</div>
-                <div id="connectedPlayersList">Подключение...</div>
+                <div style="color: #666; font-size: 12px; margin-bottom: 8px;">ИГРОКИ В КОМНАТЕ:</div>
+                <div id="connectedPlayersList">Подключение к серверу...</div>
             </div>
-            <p style="color: #aaa; font-size: 14px; margin-bottom: 10px;">Пригласи друга:</p>
-            <div style="background: #000; padding: 12px; border: 1px dashed #f90; border-radius: 5px; color: #f90; margin-bottom: 20px; font-size: 13px; word-break: break-all;" id="inviteLink"></div>
-            <button class="authBtn" id="copyLinkBtn">📄 СКОПИРОВАТЬ ССЫЛКУ</button>
-            <button class="authBtn" id="startGameBtn" style="background: #0a0; border-color: #0f0; font-size: 20px;">🎮 ЗАЙТИ В АРЕНУ</button>
+            
+            <div id="inviteBox" style="display: none;">
+                <p style="color: #aaa; font-size: 14px; margin-bottom: 10px;" id="inviteTextDesc">Пригласи друга:</p>
+                <div style="background: #000; padding: 12px; border: 1px dashed #f90; border-radius: 5px; color: #f90; margin-bottom: 20px; font-size: 13px; word-break: break-all;" id="inviteLink"></div>
+                <button class="authBtn" id="copyLinkBtn">📄 СКОПИРОВАТЬ ССЫЛКУ</button>
+            </div>
+            
+            <button class="authBtn" id="startGameBtn" style="background: #0a0; border-color: #0f0; font-size: 20px; margin-top: 15px;">🎮 ЗАЙТИ В АРЕНУ</button>
             <button class="authBtn backBtn" onclick="window.location.reload()">🚪 ВЫЙТИ</button>
         </div>
     </div>
@@ -122,9 +126,16 @@
     const API_URL = window.location.origin;
     const APP_ID = 'e8e01bce-e246-44a2-ab26-9f09c5704b7d';
     let myUsername = '', targetRoomID = '', gameStarted = false, photon = null;
+    let isGuest = false;
 
     const urlParams = new URLSearchParams(window.location.search);
-    targetRoomID = urlParams.get('room') || 'ARENA_' + Math.random().toString(36).substring(2, 7).toUpperCase();
+    if(urlParams.get('room')) {
+        targetRoomID = urlParams.get('room');
+        isGuest = true;
+    } else {
+        targetRoomID = 'ARENA_' + Math.random().toString(36).substring(2, 7).toUpperCase();
+        isGuest = false;
+    }
 
     function showMainMenu() {
         document.getElementById('mainMenu').style.display = 'block';
@@ -170,7 +181,14 @@
     function showLobby() {
         document.getElementById('authPanel').style.display = 'none';
         document.getElementById('lobbyPanel').style.display = 'block';
-        document.getElementById('inviteLink').innerText = window.location.origin + window.location.pathname + "?room=" + targetRoomID;
+        
+        if (!isGuest) {
+            document.getElementById('inviteBox').style.display = 'block';
+            document.getElementById('inviteLink').innerText = window.location.origin + window.location.pathname + "?room=" + targetRoomID;
+        } else {
+            document.getElementById('inviteBox').style.display = 'none';
+        }
+
         initMultiplayer(); // Подключаемся к Photon СРАЗУ в лобби
     }
 
@@ -191,38 +209,57 @@
 
     function initMultiplayer() {
         photon = new Photon.LoadBalancing.LoadBalancingClient(Photon.ConnectionProtocol.Wss, APP_ID, '1.0');
-        photon.connectToRegion('eu');
-        photon.addEventListener(Photon.LoadBalancing.EventName.CONNECTED_TO_MASTER, () => {
-            photon.myActor().setName(myUsername);
-            photon.opJoinOrCreateRoom(targetRoomID);
-        });
-        photon.addEventListener(Photon.LoadBalancing.EventName.JOINED_ROOM, () => {
+        
+        // Правильное переопределение методов Photon JS SDK
+        photon.onStateChange = function(state) {
+            if (state === Photon.LoadBalancing.LoadBalancingClient.State.ConnectedToMaster) {
+                photon.myActor().setName(myUsername);
+                photon.opJoinOrCreateRoom(targetRoomID);
+            }
+        };
+
+        photon.onJoinRoom = function() {
+            myId = photon.myActor().actorNr;
             updatePlayerListUI();
-        });
-        photon.addEventListener(Photon.LoadBalancing.EventName.ACTOR_JOINED, updatePlayerListUI);
-        photon.addEventListener(Photon.LoadBalancing.EventName.ACTOR_LEFT, (act) => {
-            if(otherPlayers.has(act.actorNr)) { scene.remove(otherPlayers.get(act.actorNr)); otherPlayers.delete(act.actorNr); }
+        };
+
+        photon.onActorJoin = function(actor) {
             updatePlayerListUI();
-        });
-        photon.addEventListener(Photon.LoadBalancing.EventName.RAISE_EVENT, (code, data, actorNr) => {
+        };
+
+        photon.onActorLeave = function(actor) {
+            if(otherPlayers.has(actor.actorNr)) { 
+                scene.remove(otherPlayers.get(actor.actorNr)); 
+                otherPlayers.delete(actor.actorNr); 
+            }
+            updatePlayerListUI();
+        };
+
+        photon.onEvent = function(code, content, actorNr) {
             if(code === 1 && gameStarted) {
                 if(!otherPlayers.has(actorNr)) {
                     const op = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.4, 1.2), new THREE.MeshStandardMaterial({ color: 0x00aaff }));
                     scene.add(op); otherPlayers.set(actorNr, op);
                 }
                 const p = otherPlayers.get(actorNr);
-                p.position.set(data.x, data.y, data.z); p.rotation.y = data.ry;
+                p.position.set(content.x, content.y, content.z); p.rotation.y = content.ry;
             }
-        });
+        };
+
+        photon.connectToRegionMaster('eu');
     }
 
     function updatePlayerListUI() {
+        if(!photon || !photon.myRoom()) return;
         const listDiv = document.getElementById('connectedPlayersList');
         const cOnline = document.getElementById('playersOnline');
-        if(!photon || !photon.myRoom()) return;
         
         let names = [];
-        photon.actors.getAll().forEach(act => names.push('<div class="player-item">👤 ' + (act.name || "Гость") + '</div>'));
+        photon.actors.getAll().forEach(act => {
+            const isMe = (act.actorNr === photon.myActor().actorNr) ? " (Вы)" : "";
+            names.push('<div class="player-item">👤 ' + (act.name || "Игрок") + isMe + '</div>');
+        });
+        
         listDiv.innerHTML = names.join('');
         cOnline.innerText = photon.actors.count;
         document.getElementById('status').innerText = '🟢 СЕРВЕР: ' + targetRoomID;
@@ -272,6 +309,18 @@
             e.position.set((Math.random()-0.5)*70, 1.25, (Math.random()-0.5)*70);
             scene.add(e); enemies.push({ mesh: e, alive: true });
         }
+
+        // Если кто-то уже есть в комнате, надо его отобразить на сцене сразу
+        if(photon && photon.myRoom()) {
+            photon.actors.getAll().forEach(act => {
+                if (act.actorNr !== photon.myActor().actorNr) {
+                    if(!otherPlayers.has(act.actorNr)) {
+                        const op = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.4, 1.2), new THREE.MeshStandardMaterial({ color: 0x00aaff }));
+                        scene.add(op); otherPlayers.set(act.actorNr, op);
+                    }
+                }
+            });
+        }
     }
 
     function animate() {
@@ -283,7 +332,9 @@
             if(keys['KeyA']) move.x -= 1; if(keys['KeyD']) move.x += 1;
             move.applyQuaternion(camera.quaternion); move.y = 0;
             camera.position.add(move.normalize().multiplyScalar(0.15));
-            if(photon && photon.myRoom()) photon.raiseEvent(1, { x: camera.position.x, y: camera.position.y, z: camera.position.z, ry: camera.rotation.y });
+            if(photon && photon.myRoom()) {
+                photon.raiseEvent(1, { x: camera.position.x, y: camera.position.y, z: camera.position.z, ry: camera.rotation.y });
+            }
         }
         renderer.render(scene, camera);
     }
@@ -302,9 +353,21 @@
         settings.mouseSens = parseFloat(e.target.value);
         document.getElementById('sensVal').innerText = settings.mouseSens.toFixed(1);
     });
+    
+    window.addEventListener('mousedown', e => {
+        if(document.pointerLockElement && ammo > 0) {
+            ammo--;
+            const b = new THREE.Mesh(new THREE.SphereGeometry(0.15), new THREE.MeshBasicMaterial({ color: 0xffff00 }));
+            b.position.copy(camera.position);
+            const dir = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
+            bullets.push({ mesh: b, vel: dir.multiplyScalar(1.2), life: 60 });
+            scene.add(b);
+            document.getElementById('ammo').innerText = ammo + '/30';
+        }
+    });
 
     window.addEventListener('resize', () => {
-        if(!renderer) return;
+        if(!camera) return;
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
